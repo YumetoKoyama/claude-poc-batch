@@ -1,0 +1,108 @@
+name: Claude - Issue から実装・PR作成
+
+# Issue に @claude と書いてコメントすることで、Claude Code が
+#   1. feature ブランチを作成
+#   2. implement-from-issue スキルを使って実装・テスト
+#   3. PR を作成
+# を自動実行する。
+#
+# 必要シークレット:
+#   CLAUDE_CODE_OAUTH_TOKEN  ... Claude Code の OAuth トークン
+#   CLAUDE_GITHUB_PAT        ... Claude のコミット/push で CI を再トリガーするための PAT
+#                                (GITHUB_TOKEN はデフォルトで CI を起動しないため PAT が必要)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  claude-implement:
+    # PR コメントではなく Issue コメントに限定し、かつ @claude を含む場合のみ実行
+    if: |
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          fetch-depth: 0
+
+      - name: docs リポジトリのチェックアウト（設計書参照用・読み取り専用）
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          repository: ${{ github.repository_owner }}/claude-poc-docs
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          path: claude-poc-docs
+
+      - name: Claude Code - Issue から実装・PR作成
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # PAT を使うことで Claude のコミット/push が CI ワークフローを再トリガーする
+          github_token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          claude_args: "--max-turns 50"
+          show_full_output: true
+          # Issue コメントの内容をそのまま受け取り、implement-from-issue スキルを呼ぶ
+          prompt: |
+            GitHub Issue #${{ github.event.issue.number }} への対応を開始してください。
+
+            コメント内容:
+            ${{ github.event.comment.body }}
+
+            以下の手順で実行してください:
+            1. /implement-from-issue ${{ github.event.issue.number }} を実行する
+            2. スキルの指示に従い、ブランチ作成・実装・品質チェック・PR 作成まで一気通貫で行う
+            3. 作業完了後、Issue #${{ github.event.issue.number }} にコメントで結果を報告する
+          # Claude Code Action が使用するツール権限
+          settings: |
+            {
+              "permissions": {
+                "allow": [
+                  "Write(*)",
+                  "Edit(*)",
+                  "Bash(git checkout:*)",
+                  "Bash(git pull:*)",
+                  "Bash(git push:*)",
+                  "Bash(git add:*)",
+                  "Bash(git commit:*)",
+                  "Bash(git branch:*)",
+                  "Bash(git log:*)",
+                  "Bash(git diff:*)",
+                  "Bash(git status:*)",
+                  "Bash(cat:*)",
+                  "Bash(ls:*)",
+                  "Bash(find:*)",
+                  "Bash(grep:*)",
+                  "Bash(mkdir:*)",
+                  "Bash(gh pr create:*)",
+                  "Bash(gh pr view:*)",
+                  "Bash(gh pr list:*)",
+                  "Bash(gh pr comment:*)",
+                  "Bash(gh issue view:*)",
+                  "Bash(gh issue comment:*)",
+                  "Bash(gh issue edit:*)",
+                  "Bash(gh issue list:*)",
+                  "Bash(gh run view:*)",
+                  "Bash(git apply:*)",
+                  "Bash(git stash:*)",
+                  "Bash(git cat-file:*)",
+                  "Bash(git hash-object:*)",
+                  "Bash(git version:*)",
+                  "Bash(base64:*)",
+                  "Bash(wc:*)",
+                  "Bash(mvn:*)",
+                  "Bash(npm:*)",
+                  "Bash(npx:*)"
+                ]
+              }
+            }

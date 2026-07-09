@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  確定表 #12 PMD ルールセット（PMD 7.x 構文）
+  category 参照ベースで再構成。実装に都度生成させず本ファイルを固定参照する。
+-->
+<ruleset name="logistics-matching-pmd"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+  <description>配送マッチング バックエンド向け PMD ルールセット（demo 第1版）</description>
+
+  <rule ref="category/java/bestpractices.xml">
+    <exclude name="JUnitTestsShouldIncludeAssert"/>
+    <exclude name="GuardLogStatement"/>
+  </rule>
+
+  <rule ref="category/java/errorprone.xml">
+    <!-- Lombok / JPA エンティティで誤爆しやすいものを除外 -->
+    <exclude name="BeanMembersShouldSerialize"/>
+    <!-- DataClass は PMD 7 で design.xml に移動したため errorprone での除外は不要（design.xml 側で除外） -->
+    <exclude name="AvoidFieldNameMatchingMethodName"/>
+    <!-- 業務コードの文字列/数値比較（status.equals("ACTIVE") 等）で多発しノイズになるため除外 -->
+    <exclude name="AvoidLiteralsInIfCondition"/>
+  </rule>
+
+  <rule ref="category/java/design.xml">
+    <exclude name="LawOfDemeter"/>
+    <exclude name="LoosePackageCoupling"/>
+    <exclude name="TooManyMethods"/>
+    <!-- DataClass は PMD 7 で design.xml に移動。DTO/PageMeta 等の純粋なデータクラスは正常 -->
+    <exclude name="DataClass"/>
+    <!-- ドメインモデルのコンストラクタはテーブルのカラム数に対応するため 10 超えが発生しうる。除外する -->
+    <exclude name="ExcessiveParameterList"/>
+  </rule>
+
+  <rule ref="category/java/performance.xml"/>
+
+  <rule ref="category/java/codestyle.xml">
+    <exclude name="AtLeastOneConstructor"/>
+    <exclude name="OnlyOneReturn"/>
+    <exclude name="LocalVariableCouldBeFinal"/>
+    <exclude name="MethodArgumentCouldBeFinal"/>
+    <exclude name="ShortClassName"/>
+    <exclude name="ShortVariable"/>
+    <exclude name="LongVariable"/>
+    <exclude name="CommentDefaultAccessModifier"/>
+  </rule>
+
+</ruleset>

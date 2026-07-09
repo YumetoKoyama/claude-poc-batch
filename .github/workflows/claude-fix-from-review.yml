@@ -1,0 +1,197 @@
+name: Claude - PR レビューコメント対応
+
+# PR の差分インラインコメントに @claude と書いて返信すると、
+# Claude Code が対象ブランチに修正コミットを積んでコメントに返信する。
+#
+# 運用イメージ:
+#   @claude
+#
+#   <指摘内容>
+#
+# 必要シークレット:
+#   CLAUDE_CODE_OAUTH_TOKEN  ... Claude Code の OAuth トークン
+#   CLAUDE_GITHUB_PAT        ... Claude のコミット/push で CI を再トリガーするための PAT
+#                                (GITHUB_TOKEN はデフォルトで CI を起動しないため PAT が必要)
+
+on:
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  claude-fix:
+    # @claude を含むコメントのみ実行
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: docs リポジトリのチェックアウト（設計書参照用・読み取り専用）
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          repository: ${{ github.repository_owner }}/claude-poc-docs
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          path: claude-poc-docs
+
+      - name: Claude Code - PR レビューコメント対応
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          claude_args: "--max-turns 60"
+          show_full_output: true
+          prompt: |
+            PR #${{ github.event.pull_request.number }} のレビューコメントへの対応を開始してください。
+            現在のブランチ: ${{ github.event.pull_request.head.ref }}
+
+            【レビューコメント情報】
+            - コメント ID: ${{ github.event.comment.id }}
+            - 対象ファイル: ${{ github.event.comment.path }}
+            - 対象行: ${{ github.event.comment.line }}
+            - コメント内容:
+            ${{ github.event.comment.body }}
+
+            以下の手順で実行してください:
+            1. gh pr view ${{ github.event.pull_request.number }} で PR の概要を確認する
+            2. コメントの指摘内容を理解し、対象ファイル（${{ github.event.comment.path }}）の該当箇所を確認する
+            3. 指摘内容に従って修正を行う
+            4. git add / git commit / git push で変更を現在のブランチにプッシュする
+               （PR は新規作成せず、既存 PR に追加コミットするのみ）
+            5. 以下のコマンドでレビューコメントに返信して対応内容を報告する:
+               gh api -X POST "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.id }}/replies" \
+                 -f body="対応内容の説明"
+          settings: |
+            {
+              "permissions": {
+                "allow": [
+                  "Write(*)",
+                  "Edit(*)",
+                  "Bash(git checkout:*)",
+                  "Bash(git pull:*)",
+                  "Bash(git push:*)",
+                  "Bash(git add:*)",
+                  "Bash(git commit:*)",
+                  "Bash(git branch:*)",
+                  "Bash(git log:*)",
+                  "Bash(git diff:*)",
+                  "Bash(git status:*)",
+                  "Bash(cat:*)",
+                  "Bash(ls:*)",
+                  "Bash(find:*)",
+                  "Bash(grep:*)",
+                  "Bash(mkdir:*)",
+                  "Bash(bash:*)",
+                  "Bash(gh pr view:*)",
+                  "Bash(gh pr comment:*)",
+                  "Bash(gh api:*)",
+                  "Bash(git apply:*)",
+                  "Bash(git stash:*)",
+                  "Bash(git cat-file:*)",
+                  "Bash(git hash-object:*)",
+                  "Bash(git version:*)",
+                  "Bash(base64:*)",
+                  "Bash(wc:*)",
+                  "Bash(mvn:*)",
+                  "Bash(npm:*)",
+                  "Bash(npx:*)"
+                ]
+              }
+            }
+
+  claude-fix-on-request-changes:
+    # @claude を含む Request Changes レビューがサブミットされたときのみ実行
+    if: github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' && contains(github.event.review.body, '@claude')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: docs リポジトリのチェックアウト（設計書参照用・読み取り専用）
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          repository: ${{ github.repository_owner }}/claude-poc-docs
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          path: claude-poc-docs
+
+      - name: Claude Code - Request Changes 対応
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          claude_args: "--max-turns 60"
+          show_full_output: true
+          prompt: |
+            PR #${{ github.event.pull_request.number }} に Request Changes レビューが届きました。
+            現在のブランチ: ${{ github.event.pull_request.head.ref }}
+
+            【レビュー情報】
+            - レビュアー: ${{ github.event.review.user.login }}
+            - レビュー本文:
+            ${{ github.event.review.body }}
+
+            以下の手順で実行してください:
+            1. gh pr view ${{ github.event.pull_request.number }} で PR の概要を確認する
+            2. 次のコマンドでこのレビュー（ID: ${{ github.event.review.id }}）に紐づくインラインコメントのみ取得する:
+               gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+                 --jq '[.[] | select(.pull_request_review_id == ${{ github.event.review.id }}) | {path, line, body}]'
+            3. レビュー本文とインラインコメントの指摘内容をすべて理解し、対象ファイルの該当箇所を修正する
+            4. git add / git commit / git push で変更を現在のブランチにプッシュする
+               （PR は新規作成せず、既存 PR に追加コミットするのみ）
+            5. 以下のコマンドで PR にコメントして対応内容を報告する:
+               gh pr comment ${{ github.event.pull_request.number }} --body "対応内容の説明"
+          settings: |
+            {
+              "permissions": {
+                "allow": [
+                  "Write(*)",
+                  "Edit(*)",
+                  "Bash(git checkout:*)",
+                  "Bash(git pull:*)",
+                  "Bash(git push:*)",
+                  "Bash(git add:*)",
+                  "Bash(git commit:*)",
+                  "Bash(git branch:*)",
+                  "Bash(git log:*)",
+                  "Bash(git diff:*)",
+                  "Bash(git status:*)",
+                  "Bash(cat:*)",
+                  "Bash(ls:*)",
+                  "Bash(find:*)",
+                  "Bash(grep:*)",
+                  "Bash(mkdir:*)",
+                  "Bash(bash:*)",
+                  "Bash(gh pr view:*)",
+                  "Bash(gh pr comment:*)",
+                  "Bash(gh api:*)",
+                  "Bash(git apply:*)",
+                  "Bash(git stash:*)",
+                  "Bash(git cat-file:*)",
+                  "Bash(git hash-object:*)",
+                  "Bash(git version:*)",
+                  "Bash(base64:*)",
+                  "Bash(wc:*)",
+                  "Bash(mvn:*)",
+                  "Bash(npm:*)",
+                  "Bash(npx:*)"
+                ]
+              }
+            }

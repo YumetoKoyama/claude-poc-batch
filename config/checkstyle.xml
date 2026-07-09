@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE module PUBLIC
+    "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+    "https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!--
+  確定表 #12 Checkstyle 設定（Checkstyle 10.21.x 対応）
+  - LineLength は Checker 直下に置く（TreeWalker の子にすると版不整合エラー）
+  - テストの snake_case メソッド名は checkstyle-suppressions.xml で許可
+-->
+<module name="Checker">
+  <property name="charset" value="UTF-8"/>
+  <property name="severity" value="warning"/>
+  <property name="fileExtensions" value="java"/>
+
+  <module name="SuppressionFilter">
+    <property name="file" value="config/checkstyle-suppressions.xml"/>
+    <property name="optional" value="false"/>
+  </module>
+
+  <!-- ファイルレベル（Checker 直下に置く必要があるチェック） -->
+  <module name="LineLength">
+    <property name="max" value="140"/>
+    <property name="ignorePattern" value="^package.*|^import.*|a href|href|http://|https://|ftp://"/>
+  </module>
+  <module name="FileTabCharacter">
+    <property name="eachLine" value="true"/>
+  </module>
+  <module name="NewlineAtEndOfFile"/>
+
+  <module name="TreeWalker">
+    <!-- 命名規則 -->
+    <module name="TypeName"/>
+    <module name="MethodName">
+      <property name="format" value="^[a-z][a-zA-Z0-9]*$"/>
+    </module>
+    <module name="ConstantName"/>
+    <module name="LocalVariableName"/>
+    <module name="ParameterName"/>
+    <module name="MemberName"/>
+    <module name="PackageName"/>
+
+    <!-- import -->
+    <module name="AvoidStarImport"/>
+    <module name="UnusedImports"/>
+    <module name="RedundantImport"/>
+
+    <!-- サイズ -->
+    <module name="MethodLength">
+      <property name="max" value="150"/>
+    </module>
+
+    <!-- 空白・ブロック -->
+    <module name="WhitespaceAround"/>
+    <module name="NeedBraces"/>
+    <module name="LeftCurly"/>
+    <module name="RightCurly"/>
+
+    <!-- コーディング -->
+    <module name="EqualsHashCode"/>
+    <module name="SimplifyBooleanExpression"/>
+    <module name="SimplifyBooleanReturn"/>
+    <module name="OneStatementPerLine"/>
+  </module>
+</module>

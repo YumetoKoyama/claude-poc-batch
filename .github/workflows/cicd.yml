@@ -1,0 +1,350 @@
+# ============================================================
+# CICD — claude-poc-batch 品質ゲート + デプロイ
+#
+# ワークフロー名は "CICD" で固定。
+#
+# フロー:
+#   build → [test-unit, test-integration, pmd, spotbugs, checkstyle] 並列
+#         → coverage-report（unit + integration の exec をマージ）
+#         → cd（workflow_dispatch のみ、デプロイ先設定完了後に中身を実装）
+#
+# テスト分離規約:
+#   @Tag("integration") 付き → DB 層（Testcontainers / PostgreSQL 16）→ test-integration ジョブ
+#   タグなし               → 非 DB 層（Mockito 等）              → test-unit ジョブ
+# ============================================================
+name: CICD
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+env:
+  JAVA_VERSION: '25'
+  JAVA_DISTRIBUTION: temurin
+  JACOCO_VERSION: '0.8.15'
+
+# ============================================================
+# ① Build — コンパイル確認（後続ジョブの起動ゲート）
+#
+# ソースが存在しない場合（基盤設定前など）は should_skip=true を
+# 出力してビルドを正常終了させ、後続の全ジョブをスキップさせる。
+# ============================================================
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check-source.outputs.skip }}
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Check source directory
+        id: check-source
+        run: |
+          if [ ! -f "pom.xml" ] || [ ! -d "src/main/java" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Build skipped::ソースディレクトリが存在しません（pom.xml: $([ -f pom.xml ] && echo '有' || echo '無'), src/main/java: $([ -d src/main/java ] && echo '有' || echo '無')）。基盤設定前のため全ジョブをスキップします。"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "pom.xml と src/main/java を確認。ビルドを実行します。"
+          fi
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        if: steps.check-source.outputs.skip != 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Compile（main & test）
+        if: steps.check-source.outputs.skip != 'true'
+        run: mvn -B compile test-compile -DskipTests
+
+  # ============================================================
+  # ② 品質ゲート — 並列実行（build 成功後）
+  # ============================================================
+
+  # ── テスト（非 DB 層）──────────────────────────────────────
+  test-unit:
+    name: "Test / Unit（非 DB 層）"
+    needs: build
+    if: needs.build.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Run unit tests（@Tag("integration") を除外）
+        # DB 層テストは @Tag("integration") で識別する（Testcontainers 使用テストが対象）。
+        # タグなしのテストがすべてここで実行される。
+        run: |
+          mvn -B test \
+            -DexcludedGroups="integration" \
+            -Djacoco.destFile=target/jacoco-unit.exec \
+            -Djacoco.dataFile=target/jacoco-unit.exec
+
+      - name: Upload surefire reports（unit）
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: surefire-unit
+          path: target/surefire-reports/
+          retention-days: 7
+
+      - name: Upload JaCoCo exec（unit）
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: jacoco-unit-exec
+          path: target/jacoco-unit.exec
+          if-no-files-found: warn
+          retention-days: 1
+
+  # ── テスト（DB 層 / Testcontainers）──────────────────────────
+  test-integration:
+    name: "Test / Integration（DB 層 - Testcontainers）"
+    needs: build
+    if: needs.build.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Run integration tests（@Tag("integration") のみ）
+        # Testcontainers は GitHub Actions の ubuntu-latest ランナー上の Docker を使用する。
+        # タグ付きテストが存在しない間は 0 件で正常終了する（-DfailIfNoTests=false）。
+        run: |
+          mvn -B test \
+            -Dgroups="integration" \
+            -DfailIfNoTests=false \
+            -Djacoco.destFile=target/jacoco-it.exec \
+            -Djacoco.dataFile=target/jacoco-it.exec
+
+      - name: Upload surefire reports（integration）
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: surefire-integration
+          path: target/surefire-reports/
+          retention-days: 7
+
+      - name: Upload JaCoCo exec（integration）
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: jacoco-it-exec
+          path: target/jacoco-it.exec
+          if-no-files-found: warn
+          retention-days: 1
+
+  # ── PMD ───────────────────────────────────────────────────
+  pmd:
+    name: Static Analysis / PMD
+    needs: build
+    if: needs.build.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Run PMD
+        # verify フェーズで PMD のみ実行。
+        # JaCoCo は -DskipTests 環境でテストデータがないため skip。
+        # Checkstyle・SpotBugs は別ジョブで並列実行するため skip。
+        run: |
+          mvn -B verify -DskipTests \
+            -Djacoco.skip=true \
+            -Dcheckstyle.skip=true \
+            -Dspotbugs.skip=true
+
+      - name: Upload PMD report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pmd-report
+          path: target/pmd.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ── SpotBugs ──────────────────────────────────────────────
+  spotbugs:
+    name: Static Analysis / SpotBugs
+    needs: build
+    if: needs.build.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Run SpotBugs
+        # verify フェーズで SpotBugs のみ実行（バイトコード解析のため compile 要）。
+        # JaCoCo・Checkstyle・PMD は別ジョブで実行するため skip。
+        run: |
+          mvn -B verify -DskipTests \
+            -Djacoco.skip=true \
+            -Dcheckstyle.skip=true \
+            -Dpmd.skip=true
+
+      - name: Upload SpotBugs report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: spotbugs-report
+          path: target/spotbugsXml.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ── Checkstyle ────────────────────────────────────────────
+  checkstyle:
+    name: Static Analysis / Checkstyle
+    needs: build
+    if: needs.build.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Run Checkstyle
+        # ソース解析のみのため goal を直接呼び出し（compile 不要）。
+        run: mvn -B checkstyle:check
+
+      - name: Upload Checkstyle report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: checkstyle-report
+          path: target/checkstyle-result.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ============================================================
+  # ③ カバレッジマージ（unit + integration 完了後）
+  # ============================================================
+  coverage-report:
+    name: Coverage / Merge & Report
+    needs: [build, test-unit, test-integration]
+    if: needs.build.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Compile（レポート生成用クラスファイル）
+        run: mvn -B compile -DskipTests
+
+      - name: Download JaCoCo exec（unit）
+        uses: actions/download-artifact@v7
+        with:
+          name: jacoco-unit-exec
+          path: coverage/
+
+      - name: Download JaCoCo exec（integration）
+        uses: actions/download-artifact@v7
+        with:
+          name: jacoco-it-exec
+          path: coverage/
+        # IT テストが未実装の場合はアーティファクトが存在しないため続行する
+        continue-on-error: true
+
+      - name: Download JaCoCo CLI v${{ env.JACOCO_VERSION }}
+        run: |
+          curl -fsSL \
+            "https://github.com/jacoco/jacoco/releases/download/v${{ env.JACOCO_VERSION }}/jacoco-${{ env.JACOCO_VERSION }}.zip" \
+            -o jacoco.zip
+          unzip -j jacoco.zip \
+            "lib/jacococli.jar" \
+            -d .
+
+      - name: Merge JaCoCo exec files
+        run: |
+          EXEC_ARGS="coverage/jacoco-unit.exec"
+          if [ -f "coverage/jacoco-it.exec" ]; then
+            EXEC_ARGS="$EXEC_ARGS coverage/jacoco-it.exec"
+            echo "IT exec を検出: unit + integration をマージします"
+          else
+            echo "IT exec が存在しないため unit のみでレポートを生成します"
+          fi
+          java -jar jacococli.jar merge $EXEC_ARGS \
+            --destfile coverage/jacoco-merged.exec
+
+      - name: Generate merged coverage report
+        run: |
+          mkdir -p target/site/jacoco-merged
+          java -jar jacococli.jar report coverage/jacoco-merged.exec \
+            --classfiles target/classes \
+            --sourcefiles src/main/java \
+            --xml target/site/jacoco-merged/jacoco.xml \
+            --html target/site/jacoco-merged/
+
+      - name: Upload merged coverage report
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-report
+          path: target/site/jacoco-merged/
+          retention-days: 30
+
+  # ============================================================
+  # ④ CD — 手動実行のみ（workflow_dispatch）
+  #    デプロイ先（ECS 等）の設定完了後に各ステップの中身を実装すること。
+  # ============================================================
+  cd:
+    name: "CD / Deploy（手動・未実装）"
+    # 手動実行（workflow_dispatch）かつ main ブランチの場合のみ実行
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_name == 'main' &&
+      needs.build.outputs.should_skip != 'true'
+    needs: [build, test-unit, test-integration, pmd, spotbugs, checkstyle, coverage-report]
+    runs-on: ubuntu-latest
+    # environment: production
+    # デプロイ先設定完了後に有効化する。
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: "CD not implemented"
+        run: |
+          echo "::notice title=CD skipped::デプロイ先（ECS 等）が未設定のため CD はスキップします。"
+          echo "デプロイ先が決まったら cicd.yml の cd ジョブに実装を追加してください。"

@@ -1,0 +1,120 @@
+name: Claude - CI失敗の自動調査・修正
+
+# "CICD" ワークフローが PR ブランチで失敗した場合に自動起動し、
+# Claude Code が CI ログを解析して根本原因を特定・修正・push する。
+# push 後に CI が再実行されるため、修正が正しければ次回は green になる。
+#
+# 必要シークレット:
+#   CLAUDE_CODE_OAUTH_TOKEN  ... Claude Code の OAuth トークン
+#   CLAUDE_GITHUB_PAT        ... Claude のコミット/push で CI を再トリガーするための PAT
+
+on:
+  workflow_run:
+    # このリポジトリの CICD ワークフローの name と一致させる
+    workflows: ["CICD"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  claude-fix-ci:
+    # main への直接 push ではなく、PR ブランチの CI 失敗のみを対象にする
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_branch != 'main' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout（失敗した PR ブランチ）
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          fetch-depth: 0
+
+      - name: docs リポジトリのチェックアウト（設計書参照用・読み取り専用）
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          repository: ${{ github.repository_owner }}/claude-poc-docs
+          token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          path: claude-poc-docs
+
+      - name: PR 番号を取得
+        id: pr-info
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_GITHUB_PAT }}
+        run: |
+          PR_NUMBER=$(gh pr list \
+            --head "${{ github.event.workflow_run.head_branch }}" \
+            --json number \
+            --jq '.[0].number')
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Claude Code - CI失敗を調査・修正
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.CLAUDE_GITHUB_PAT }}
+          claude_args: "--max-turns 50"
+          show_full_output: true
+          prompt: |
+            CI が失敗しました。/ci-fix スキルを使って調査・修正してください。
+
+            ## 失敗した CI 情報
+            - ワークフロー実行 ID: ${{ github.event.workflow_run.id }}
+            - ブランチ: ${{ github.event.workflow_run.head_branch }}
+            - PR 番号: ${{ steps.pr-info.outputs.pr_number }}
+
+            ## CI ログの取得手順
+            gh CLI を使って以下の順で CI ログを取得・分析してください。
+
+            ### Step 1: 失敗したジョブを特定する
+            ```
+            gh run view ${{ github.event.workflow_run.id }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | {id: .databaseId, name}'
+            ```
+
+            ### Step 2: 失敗ジョブのログを取得する（--job は必ず指定する）
+            ```
+            gh run view ${{ github.event.workflow_run.id }} --log --job <job-id>
+            ```
+
+            ### Step 3: エラーを分析して修正する
+            ログを読んで根本原因を特定し、必要な修正をコードに適用してください。
+
+            注意: --log は必ず --job と併用すること。全ジョブのログを一度に取得しないこと。
+
+            ## 注意事項
+            - 修正コミット後に push すると CI が自動再実行される
+            - 修正が完了したら PR #${{ steps.pr-info.outputs.pr_number }} にコメントで結果を報告する
+            - 根本原因が特定できない場合は推測で修正せず、PR にコメントして人手確認を依頼する
+          settings: |
+            {
+              "permissions": {
+                "allow": [
+                  "Bash(git add:*)",
+                  "Bash(git commit:*)",
+                  "Bash(git push:*)",
+                  "Bash(git diff:*)",
+                  "Bash(git log:*)",
+                  "Bash(git status:*)",
+                  "Bash(cat:*)",
+                  "Bash(find:*)",
+                  "Bash(ls:*)",
+                  "Bash(gh pr create:*)",
+                  "Bash(gh pr view:*)",
+                  "Bash(gh pr list:*)",
+                  "Bash(gh pr comment:*)",
+                  "Bash(gh issue view:*)",
+                  "Bash(gh issue comment:*)",
+                  "Bash(gh issue edit:*)",
+                  "Bash(gh issue list:*)",
+                  "Bash(gh run view:*)",
+                  "Bash(mvn:*)",
+                  "Bash(npm:*)",
+                  "Bash(npx:*)"
+                ]
+              }
+            }

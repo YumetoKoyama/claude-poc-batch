@@ -1,0 +1,28 @@
+# バッチ品質ゲート実行環境
+#
+# mvn verify（テスト + JaCoCo + Checkstyle + PMD + SpotBugs）を
+# Docker コンテナ内で実行する。Testcontainers がホストの Docker を
+# 使って postgres:16 コンテナを起動するため docker.sock をマウントする。
+#
+# 実行: docker compose run --rm batch-verify
+# キャッシュ込み再実行: docker compose run --rm batch-verify  # M2 キャッシュは volume で保持
+# イメージ再ビルド: docker compose build batch-verify
+
+services:
+  batch-verify:
+    build:
+      context: .
+      dockerfile: docker/batch.Dockerfile
+    volumes:
+      # M2 キャッシュを volume で保持して依存関係の再ダウンロードを防ぐ
+      - m2-cache:/root/.m2
+      # Testcontainers がホストの Docker デーモンを使用できるようにする
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Testcontainers がコンテナから起動した postgres へ接続するためのホスト指定
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+      # Ryuk（リソース回収コンテナ）をホスト Docker で動かすための設定
+      TESTCONTAINERS_RYUK_DISABLED: "false"
+
+volumes:
+  m2-cache:

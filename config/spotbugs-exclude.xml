@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  確定表 #12 SpotBugs 除外フィルタ
+  DTO/エンティティ/Spring コンポーネントの機械的誤爆（EI_EXPOSE_REP/REP2・CT_CONSTRUCTOR_THROW）を
+  方針除外。実ロジックを持つクラスでの警告は @SuppressFBWarnings を個別付与する（フィルタを広げない）。
+-->
+<FindBugsFilter
+    xmlns="https://github.com/spotbugs/filter/3.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://github.com/spotbugs/filter/3.0.0 https://raw.githubusercontent.com/spotbugs/spotbugs/master/spotbugs/etc/findbugsfilter.xsd">
+
+  <!-- DTO/エンティティの可変フィールド公開は許容（Lombok 生成・JPA 都合） -->
+  <Match>
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+    <Or>
+      <Class name="~.*\.dto\..*"/>
+      <Class name="~.*\.entity\..*"/>
+      <Class name="~.*Request$"/>
+      <Class name="~.*Response$"/>
+    </Or>
+  </Match>
+
+  <!-- Spring の @Configuration / Filter でのコンストラクタ例外は DI 都合で許容 -->
+  <Match>
+    <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+    <Or>
+      <Class name="~.*Config$"/>
+      <Class name="~.*Configuration$"/>
+      <Class name="~.*Filter$"/>
+    </Or>
+  </Match>
+
+  <!-- テストコードは SpotBugs 対象外 -->
+  <Match>
+    <Source name="~.*[/\\]src[/\\]test[/\\].*"/>
+  </Match>
+
+  <!-- 自動生成 builder 等 -->
+  <Match>
+    <Class name="~.*\$Builder$"/>
+  </Match>
+
+  <!-- openapi-generator 自動生成モデル（generated.openapi パッケージ配下） -->
+  <Match>
+    <Package name="~com\.example\.logisticsmatching\.generated\..*"/>
+  </Match>
+</FindBugsFilter>

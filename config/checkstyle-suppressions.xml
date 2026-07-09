@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE suppressions PUBLIC
+    "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+    "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+<!--
+  確定表 #12 Checkstyle 抑制設定
+  テストソースは BDD 可読性のため snake_case メソッド名を許可。
+  全面 camelCase を強制したい場合は MethodName の suppress を削除する。
+-->
+<suppressions>
+  <suppress checks="MethodName" files="[/\\]src[/\\]test[/\\].*Test\.java$"/>
+  <suppress checks="MethodName" files="[/\\]src[/\\]test[/\\].*Tests\.java$"/>
+  <suppress checks="MethodName" files="[/\\]src[/\\]test[/\\].*IT\.java$"/>
+  <suppress checks="MethodLength" files="[/\\]src[/\\]test[/\\].*"/>
+  <!-- トランザクション境界を持つ Use Case の execute メソッドは業務ロジックが集中するため 150 行超を許容 -->
+  <suppress checks="MethodLength" files="AgreeApplicationUseCase\.java"/>
+  <suppress checks="MethodLength" files="AgreeSetApplicationUseCase\.java"/>
+  <!-- openapi-generator が target/generated-sources に生成したコード。全チェックを抑制 -->
+  <suppress checks=".*" files="[/\\]generated-sources[/\\]openapi[/\\]"/>
+</suppressions>

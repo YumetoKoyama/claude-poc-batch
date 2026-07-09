@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  確定表対応 pom.xml（バッチリポジトリ独立管理）
+  確定表(batch-00-stack.md)の #1〜#12 を物理化したビルド定義。
+  - バックエンド(claude-poc-backend)とは別リポジトリ・別 pom.xml で独立管理する。
+  - 品質ゲート(JaCoCo/Checkstyle/PMD/SpotBugs)はすべて verify フェーズに束縛し、
+    個別ゴールの CLI 直叩き(default-cli)を排除する → `mvn verify` 一発で全ゲートが走る。
+  - 静的解析の設定は config/ 配下の固定ファイルを参照（実装での都度生成を禁止）。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!-- #3 #4 Spring Boot 3.5.14 -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.5.14</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.example</groupId>
+  <artifactId>logistics-matching-batch</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <packaging>jar</packaging>
+  <name>logistics-matching-batch</name>
+  <description>配送マッチング Web アプリ バッチ処理（demo 第1版）</description>
+
+  <properties>
+    <!-- #2 Java 25 -->
+    <java.version>25</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- #10 静的解析ツールの版を一元管理
+         ※ 下記は Java 25 で `mvn verify` 緑を実機確認した確定値（バックエンド確定表 #12 と同一）。
+            PMD/SpotBugs は旧版が Java 25 バイトコード（class 69）を解析できず落ちるため、
+            ここに記載のバージョン以上を維持すること。 -->
+    <checkstyle.plugin.version>3.6.0</checkstyle.plugin.version>
+    <checkstyle.core.version>10.21.4</checkstyle.core.version>
+    <pmd.plugin.version>3.26.0</pmd.plugin.version>
+    <pmd.core.version>7.25.0</pmd.core.version>      <!-- 7.10.0 は class 69 非対応。7.25.0 で確認済み -->
+    <spotbugs.plugin.version>4.9.8.4</spotbugs.plugin.version> <!-- 4.8.x は非対応。4.9.8.4 で確認済み -->
+
+    <!-- #11 JaCoCo: Java 25（class 69）対応版が必須。0.8.12 は version 69 を解析できず落ちる。
+         0.8.15 で緑を確認済み（バックエンド確定表 #13 と同一）。 -->
+    <jacoco.version>0.8.15</jacoco.version>
+    <jacoco.instruction.min>1.00</jacoco.instruction.min>
+    <jacoco.branch.min>0.90</jacoco.branch.min>
+  </properties>
+
+  <dependencies>
+    <!-- #3 Spring Batch -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-batch</artifactId>
+    </dependency>
+    <!-- #6 Spring Data JPA（バッチのデータアクセス） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <!-- バリデーション（入力チェック） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <!-- 運用設計: actuator health -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <!-- #6 PostgreSQL 16 ドライバ -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- Lombok（任意・コンパイル時のみ） -->
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- SpotBugs アノテーション（@SuppressFBWarnings の個別付与用） -->
+    <dependency>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-annotations</artifactId>
+      <version>4.8.6</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- #8 単体テスト: JUnit5 + Mockito + AssertJ（starter-test 同梱） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- #8 Spring Batch テストサポート（JobLauncherTestUtils / JobRepositoryTestUtils / StepScopeTestUtils） -->
+    <dependency>
+      <groupId>org.springframework.batch</groupId>
+      <artifactId>spring-batch-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- #9 結合テスト: Testcontainers（PostgreSQL 16） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Spring Boot Maven Plugin -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <exclude>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+            </exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+
+      <!-- #11 JaCoCo: prepare-agent / report / check を verify までに束縛 -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco.version}</version>
+        <configuration>
+          <excludes>
+            <!-- 各除外に理由コメント必須（batch-00-stack.md #11） -->
+            <exclude>**/entity/**</exclude>          <!-- JPA エンティティ。getter/setter 自動生成 -->
+            <exclude>**/dto/**</exclude>             <!-- DTO/Lombok 自動生成。ロジックなし -->
+            <exclude>**/config/**</exclude>          <!-- 設定クラス。フレームワーク接着層 -->
+            <exclude>**/*JobConfig.class</exclude>   <!-- Job/Step Bean 定義のみ。業務ロジックなし -->
+            <exclude>**/*Application.class</exclude> <!-- Spring Boot メインクラス -->
+            <exclude>**/PhysicalDeleteItemReader.class</exclude> <!-- static factory のみ。private コンストラクタは到達不能 -->
+          </excludes>
+        </configuration>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals><goal>prepare-agent</goal></goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals><goal>report</goal></goals>
+          </execution>
+          <execution>
+            <id>check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+            <configuration>
+              <rules>
+                <rule>
+                  <element>BUNDLE</element>
+                  <limits>
+                    <limit>
+                      <counter>INSTRUCTION</counter>
+                      <value>COVEREDRATIO</value>
+                      <minimum>${jacoco.instruction.min}</minimum>
+                    </limit>
+                    <limit>
+                      <counter>BRANCH</counter>
+                      <value>COVEREDRATIO</value>
+                      <minimum>${jacoco.branch.min}</minimum>
+                    </limit>
+                  </limits>
+                </rule>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- #10 Checkstyle（verify 束縛・config 固定） -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>${checkstyle.plugin.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.core.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <configLocation>config/checkstyle.xml</configLocation>
+          <suppressionsLocation>config/checkstyle-suppressions.xml</suppressionsLocation>
+          <includeTestSourceDirectory>true</includeTestSourceDirectory>
+          <consoleOutput>true</consoleOutput>
+          <failsOnError>true</failsOnError>
+          <violationSeverity>warning</violationSeverity>
+        </configuration>
+        <executions>
+          <execution>
+            <id>checkstyle-check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- #10 PMD（verify 束縛・PMD7 ruleset 固定） -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>${pmd.plugin.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>net.sourceforge.pmd</groupId>
+            <artifactId>pmd-core</artifactId>
+            <version>${pmd.core.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>net.sourceforge.pmd</groupId>
+            <artifactId>pmd-java</artifactId>
+            <version>${pmd.core.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <rulesets>
+            <ruleset>config/pmd-ruleset.xml</ruleset>
+          </rulesets>
+          <includeTests>false</includeTests>
+          <printFailingErrors>true</printFailingErrors>
+          <failOnViolation>true</failOnViolation>
+        </configuration>
+        <executions>
+          <execution>
+            <id>pmd-check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- #10 SpotBugs（verify 束縛・除外フィルタ固定） -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs.plugin.version}</version>
+        <configuration>
+          <effort>Max</effort>
+          <threshold>Medium</threshold>
+          <excludeFilterFile>config/spotbugs-exclude.xml</excludeFilterFile>
+          <failOnError>true</failOnError>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotbugs-check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
